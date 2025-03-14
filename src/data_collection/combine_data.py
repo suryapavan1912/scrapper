@@ -1,46 +1,49 @@
 #!/usr/bin/env python3
 """
 Data Combiner for Mental Health Resources
-This script combines data from multiple sources (Yelp and Google Places)
-to create a comprehensive dataset for mental health resources.
+This script combines data from the raw_places collection (Yelp and Google Places)
+to create a comprehensive dataset in the processed_places collection.
 """
 
-import os
-import json
 import argparse
-import glob
-import pandas as pd
 from datetime import datetime
+from mongo_utils import (
+    get_raw_places,
+    save_processed_places,
+    get_cities_collection
+)
 
-def load_json_files(directory, pattern):
+def load_data_from_mongodb(city_slug=None, category=None):
     """
-    Load all JSON files matching a pattern in a directory.
+    Load data from the raw_places collection with optional filtering.
     
     Args:
-        directory (str): Directory to search in
-        pattern (str): Glob pattern to match files
+        city_slug (str, optional): Filter by city slug
+        category (str, optional): Filter by category
         
     Returns:
-        list: List of dictionaries, each containing data from a JSON file
+        list: List of dictionaries containing raw place data
     """
-    files = glob.glob(os.path.join(directory, pattern))
-    data = []
+    print(f"Loading raw data from MongoDB...")
     
-    for file in files:
-        try:
-            with open(file, 'r', encoding='utf-8') as f:
-                file_data = json.load(f)
-                source = 'yelp' if 'yelp_' in os.path.basename(file) else 'google'
-                data.append({
-                    'source': source,
-                    'filename': os.path.basename(file),
-                    'data': file_data
-                })
-                print(f"Loaded {len(file_data)} records from {file}")
-        except Exception as e:
-            print(f"Error loading {file}: {e}")
+    # Get all raw places, optionally filtered by city and category
+    places = get_raw_places(city_slug=city_slug, category=category)
     
-    return data
+    if city_slug:
+        print(f"Loaded {len(places)} raw records for city slug '{city_slug}'")
+    else:
+        print(f"Loaded {len(places)} raw records from all cities")
+    
+    # Group by source for processing
+    yelp_data = [place for place in places if place.get('source') == 'yelp']
+    google_data = [place for place in places if place.get('source') == 'google']
+    
+    print(f"Found {len(yelp_data)} Yelp records and {len(google_data)} Google records")
+    
+    return {
+        'yelp': yelp_data,
+        'google': google_data
+    }
 
 def normalize_yelp_data(yelp_data):
     """
@@ -56,26 +59,37 @@ def normalize_yelp_data(yelp_data):
     
     for business in yelp_data:
         normalized_item = {
-            'source': 'yelp',
-            'id': business.get('id', ''),
             'name': business.get('name', ''),
             'address': ', '.join(business.get('location', {}).get('display_address', [])),
-            'city': business.get('location', {}).get('city', ''),
-            'state': business.get('location', {}).get('state', ''),
+            'city_slug': business.get('city_slug', ''),
+            'city_name': business.get('city_name', ''),
+            'state': business.get('state', ''),
+            'state_code': business.get('state_code', ''),
             'zip_code': business.get('location', {}).get('zip_code', ''),
             'country': business.get('location', {}).get('country', ''),
-            'latitude': business.get('coordinates', {}).get('latitude', ''),
-            'longitude': business.get('coordinates', {}).get('longitude', ''),
+            'location': {
+                'type': 'Point',
+                'coordinates': [
+                    business.get('coordinates', {}).get('longitude', 0),
+                    business.get('coordinates', {}).get('latitude', 0)
+                ]
+            },
             'phone': business.get('display_phone', ''),
             'website': business.get('url', ''),
             'rating': business.get('rating', ''),
             'review_count': business.get('review_count', ''),
             'price_level': business.get('price', ''),
+            'category': business.get('category', ''),
             'categories': ', '.join([c.get('title', '') for c in business.get('categories', [])]),
             'image_url': business.get('image_url', ''),
             'is_closed': business.get('is_closed', False),
             'hours': business.get('hours', []),
-            'attributes': business.get('attributes', {})
+            'source_ids': {
+                'yelp': business.get('yelp_id', business.get('id', ''))
+            },
+            'sources': ['yelp'],
+            'created_at': datetime.now(),
+            'updated_at': datetime.now()
         }
         normalized.append(normalized_item)
     
@@ -101,26 +115,36 @@ def normalize_google_data(google_data):
             price_level = price_map.get(place['price_level'], '')
             
         normalized_item = {
-            'source': 'google',
-            'id': place.get('place_id', ''),
             'name': place.get('name', ''),
             'address': place.get('formatted_address', ''),
-            'city': '',  # Google doesn't provide city separately
-            'state': '',
-            'zip_code': '',
-            'country': '',
-            'latitude': place.get('geometry', {}).get('location', {}).get('lat', ''),
-            'longitude': place.get('geometry', {}).get('location', {}).get('lng', ''),
+            'city_slug': place.get('city_slug', ''),
+            'city_name': place.get('city_name', ''),
+            'state': place.get('state', ''),
+            'state_code': place.get('state_code', ''),
+            'country': place.get('country', 'USA'),
+            'location': {
+                'type': 'Point',
+                'coordinates': [
+                    place.get('geometry', {}).get('location', {}).get('lng', 0),
+                    place.get('geometry', {}).get('location', {}).get('lat', 0)
+                ]
+            },
             'phone': place.get('formatted_phone_number', ''),
             'website': place.get('website', ''),
             'rating': place.get('rating', ''),
             'review_count': place.get('user_ratings_total', ''),
             'price_level': price_level,
+            'category': place.get('category', ''),
             'categories': ', '.join(place.get('types', [])),
             'image_url': '',  # Google photos require a separate API call
             'is_closed': place.get('business_status', '') != 'OPERATIONAL',
             'hours': place.get('opening_hours', {}).get('weekday_text', []),
-            'attributes': {}
+            'source_ids': {
+                'google': place.get('google_id', place.get('place_id', ''))
+            },
+            'sources': ['google'],
+            'created_at': datetime.now(),
+            'updated_at': datetime.now()
         }
         normalized.append(normalized_item)
     
@@ -147,66 +171,75 @@ def deduplicate_data(data, match_threshold=0.8):
     
     for item in data:
         name = item['name'].lower()
-        lat = item['latitude']
-        lng = item['longitude']
+        lng = item['location']['coordinates'][0]
+        lat = item['location']['coordinates'][1]
+        city_slug = item['city_slug']
         
-        # Create a key from name and approximate location
+        # Create a key from name, city and approximate location
         # This is a simple approach - a production system would use better matching
-        key = f"{name}"
+        key = f"{name}_{city_slug}"
         
         # If we have lat/lng, make the key more specific
         if lat and lng:
             # Round to 3 decimal places (roughly 100m precision)
-            key = f"{name}_{round(float(lat), 3)}_{round(float(lng), 3)}"
+            key = f"{name}_{city_slug}_{round(float(lat), 3)}_{round(float(lng), 3)}"
         
         if key in unique_places:
-            # We already have this place
-            # If the new record is from Google and the existing is from Yelp,
-            # or if the new record has more info, replace the existing one
+            # We already have this place - merge data
             existing = unique_places[key]
             
-            # Prefer the record with more information
-            if (item['source'] == 'google' and existing['source'] == 'yelp') or \
-               (len(str(item)) > len(str(existing))):
-                unique_places[key] = item
+            # Update source list
+            if 'sources' not in existing:
+                existing['sources'] = []
+            
+            for source in item.get('sources', []):
+                if source not in existing['sources']:
+                    existing['sources'].append(source)
+            
+            # Merge source IDs
+            if 'source_ids' not in existing:
+                existing['source_ids'] = {}
                 
+            for source, id_value in item.get('source_ids', {}).items():
+                if id_value:  # Only add if not empty
+                    existing['source_ids'][source] = id_value
+            
             # Merge any missing data from the new record into the existing one
-            else:
-                for field, value in item.items():
-                    if not existing.get(field) and value:
-                        existing[field] = value
+            for field, value in item.items():
+                if field not in ['sources', 'source_ids'] and value and not existing.get(field):
+                    existing[field] = value
         else:
             # New place
             unique_places[key] = item
     
     return list(unique_places.values())
 
-def combine_data(source_dir='data', output_dir='data'):
+def combine_data(city_slug=None, category=None, replace=False):
     """
-    Combine data from multiple sources and save to a file.
+    Combine data from raw_places collection and save to the processed_places collection.
     
     Args:
-        source_dir (str): Directory containing source data files
-        output_dir (str): Directory to save combined data
+        city_slug (str, optional): Process only data for this city
+        category (str, optional): Process only data for this category
+        replace (bool): Whether to replace existing processed data
+        
+    Returns:
+        tuple: (inserted_count, updated_count)
     """
-    # Load all JSON files
-    print("Loading Yelp data...")
-    yelp_files = load_json_files(source_dir, 'yelp_*.json')
-    
-    print("Loading Google data...")
-    google_files = load_json_files(source_dir, 'google_*.json')
-    
     all_data = []
     
+    # Load raw data from MongoDB
+    data_by_source = load_data_from_mongodb(city_slug, category)
+    
     # Normalize data from each source
-    for file_data in yelp_files:
-        print(f"Normalizing Yelp data from {file_data['filename']}...")
-        normalized = normalize_yelp_data(file_data['data'])
+    if data_by_source['yelp']:
+        print(f"Normalizing {len(data_by_source['yelp'])} Yelp records...")
+        normalized = normalize_yelp_data(data_by_source['yelp'])
         all_data.extend(normalized)
     
-    for file_data in google_files:
-        print(f"Normalizing Google data from {file_data['filename']}...")
-        normalized = normalize_google_data(file_data['data'])
+    if data_by_source['google']:
+        print(f"Normalizing {len(data_by_source['google'])} Google records...")
+        normalized = normalize_google_data(data_by_source['google'])
         all_data.extend(normalized)
     
     print(f"Total records before deduplication: {len(all_data)}")
@@ -217,33 +250,25 @@ def combine_data(source_dir='data', output_dir='data'):
     
     print(f"Total records after deduplication: {len(deduplicated_data)}")
     
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
+    # Save to MongoDB processed collection
+    print(f"Saving {len(deduplicated_data)} records to MongoDB processed collection...")
+    inserted, updated = save_processed_places(deduplicated_data, replace)
+    print(f"Processed data saved: {inserted} new records, {updated} updated records.")
     
-    # Save combined data
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    json_filename = os.path.join(output_dir, f"combined_data_{timestamp}.json")
-    
-    with open(json_filename, 'w', encoding='utf-8') as f:
-        json.dump(deduplicated_data, f, indent=2)
-    
-    # Save as CSV for easy viewing
-    csv_filename = os.path.join(output_dir, f"combined_data_{timestamp}.csv")
-    df = pd.DataFrame(deduplicated_data)
-    df.to_csv(csv_filename, index=False)
-    
-    print(f"Combined data saved to {json_filename} and {csv_filename}")
+    return inserted, updated
 
 def main():
-    parser = argparse.ArgumentParser(description='Combine data from multiple sources')
-    parser.add_argument('--source', type=str, default='data',
-                        help='Directory containing source data files')
-    parser.add_argument('--output', type=str, default='data',
-                        help='Directory to save combined data')
+    parser = argparse.ArgumentParser(description='Combine data from raw places collection')
+    parser.add_argument('--replace', action='store_true',
+                        help='Replace existing processed data in MongoDB')
+    parser.add_argument('--city-slug', type=str, 
+                        help='Process only data for this city (e.g., "seattle-wa")')
+    parser.add_argument('--category', type=str,
+                        help='Process only data for this category (e.g., "escapegames")')
     
     args = parser.parse_args()
     
-    combine_data(args.source, args.output)
+    combine_data(args.city_slug, args.category, args.replace)
 
 if __name__ == "__main__":
     main() 

@@ -2,17 +2,17 @@
 """
 Google Places API Data Collector for Mental Health Resources
 This script uses the Google Places API to collect data about locations
-that might be relevant for mental health resources.
+that might be relevant for mental health resources, storing all data in MongoDB.
 """
 
 import os
-import json
 import argparse
 import requests
 import time
 from datetime import datetime
 from dotenv import load_dotenv
-import pandas as pd
+from mongo_utils import validate_city, save_raw_places
+import sys
 
 # Load environment variables
 load_dotenv()
@@ -73,6 +73,7 @@ def search_places(query, place_type=None, page_token=None):
 def get_place_details(place_id):
     """
     Get detailed information about a specific place.
+    Getting all available fields by not limiting the fields parameter.
     
     Args:
         place_id (str): Google Places place ID
@@ -82,7 +83,8 @@ def get_place_details(place_id):
     """
     params = {
         'place_id': place_id,
-        'fields': 'name,formatted_address,formatted_phone_number,website,rating,user_ratings_total,price_level,opening_hours,geometry,photos,reviews',
+        # Request all available fields instead of limiting them
+        'fields': 'name,formatted_address,formatted_phone_number,international_phone_number,website,rating,user_ratings_total,price_level,opening_hours,geometry,photos,reviews,address_components,adr_address,business_status,current_opening_hours,editorial_summary,icon,icon_background_color,icon_mask_base_uri,plus_code,serves_beer,serves_breakfast,serves_brunch,serves_dinner,serves_lunch,serves_vegetarian_food,serves_wine,takeout,url,utc_offset,vicinity,wheelchair_accessible_entrance',
         'key': API_KEY
     }
     
@@ -163,13 +165,7 @@ def enrich_data(places):
             details = details_response['result']
             
             # Create a new dict with both original data and detailed data
-            enriched_place = {
-                **place,
-                'website': details.get('website', ''),
-                'formatted_phone_number': details.get('formatted_phone_number', ''),
-                'opening_hours': details.get('opening_hours', {}),
-                'reviews': details.get('reviews', [])
-            }
+            enriched_place = {**place, **details}
             enriched_places.append(enriched_place)
         else:
             # If details request failed, just use the original data
@@ -180,61 +176,27 @@ def enrich_data(places):
     
     return enriched_places
 
-def save_data(data, location, place_type):
+def save_data(data, city_slug, place_type):
     """
-    Save the collected data to JSON and CSV files.
+    Save the collected data to MongoDB.
     
     Args:
         data (list): List of place data
-        location (str): Location name
+        city_slug (str): City slug
         place_type (str): Place type
+        
+    Returns:
+        tuple: (inserted_count, updated_count)
     """
-    # Create sanitized filenames
-    location_sanitized = location.replace(',', '').replace(' ', '_').lower()
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    
-    # Ensure data directory exists
-    os.makedirs('data', exist_ok=True)
-    
-    # Save as JSON
-    json_filename = f"data/google_{location_sanitized}_{place_type}_{timestamp}.json"
-    with open(json_filename, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
-    
-    # Convert to DataFrame and save as CSV
-    try:
-        # Flatten the data for CSV (take only top-level fields)
-        flattened_data = []
-        for place in data:
-            flat_place = {
-                'place_id': place.get('place_id', ''),
-                'name': place.get('name', ''),
-                'address': place.get('formatted_address', ''),
-                'phone': place.get('formatted_phone_number', ''),
-                'website': place.get('website', ''),
-                'rating': place.get('rating', ''),
-                'user_ratings_total': place.get('user_ratings_total', ''),
-                'price_level': place.get('price_level', ''),
-                'latitude': place.get('geometry', {}).get('location', {}).get('lat', ''),
-                'longitude': place.get('geometry', {}).get('location', {}).get('lng', ''),
-                'types': ', '.join(place.get('types', [])),
-                'business_status': place.get('business_status', '')
-            }
-            flattened_data.append(flat_place)
-        
-        df = pd.DataFrame(flattened_data)
-        csv_filename = f"data/google_{location_sanitized}_{place_type}_{timestamp}.csv"
-        df.to_csv(csv_filename, index=False)
-        
-        print(f"Data saved to {json_filename} and {csv_filename}")
-    except Exception as e:
-        print(f"Error saving CSV: {e}")
-        print(f"Data saved to {json_filename}")
+    # Save to MongoDB
+    inserted_count, updated_count = save_raw_places(data, 'google', city_slug, place_type)
+    print(f"MongoDB: {inserted_count} new records inserted, {updated_count} records updated")
+    return inserted_count, updated_count
 
 def main():
     parser = argparse.ArgumentParser(description='Collect data from Google Places API for mental health resources')
-    parser.add_argument('--city', type=str, default=DEFAULT_LOCATION, 
-                        help='City name (e.g., "Seattle, WA")')
+    parser.add_argument('--city-slug', type=str, required=True, 
+                        help='City slug (e.g., "seattle-wa")')
     parser.add_argument('--type', type=str, required=True, choices=VALID_PLACE_TYPES,
                         help='Type of place to search for')
     parser.add_argument('--max', type=int, default=60, 
@@ -246,17 +208,24 @@ def main():
         print("Error: Google Places API key not found. Please add it to your .env file.")
         return
     
-    print(f"Collecting data for {args.type} in {args.city}...")
-    places = collect_data(args.city, args.type, args.max)
+    # Validate the city exists
+    city = validate_city(args.city_slug)
+    if not city:
+        print(f"Error: City with slug '{args.city_slug}' not found. Please add it first using simple_city_fetcher.py.")
+        sys.exit(1)
+    
+    print(f"Collecting data for {args.type} in {city['name']}, {city['state_code']}...")
+    location = f"{city['name']}, {city['state_code']}"
+    places = collect_data(location, args.type, args.max)
     
     if places:
         print(f"Found {len(places)} places. Enriching data...")
         enriched_places = enrich_data(places)
         
-        print(f"Saving data for {len(enriched_places)} places...")
-        save_data(enriched_places, args.city, args.type)
+        print(f"Saving {len(enriched_places)} places to MongoDB...")
+        inserted, updated = save_data(enriched_places, args.city_slug, args.type)
         
-        print("Data collection complete!")
+        print(f"Data collection complete! {inserted} new records, {updated} updated records.")
     else:
         print("No places found or error in API request.")
 
