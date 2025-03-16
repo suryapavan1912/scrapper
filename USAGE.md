@@ -232,7 +232,6 @@ all_cities = list(cities_collection.find({}))
   "name": String,             // City name (e.g. "Seattle")
   "slug": String,             // URL-friendly identifier (e.g. "seattle")
   "state": String,            // State name (e.g. "Washington")
-  "state_code": String,       // State code (e.g. "WA")
   "country": String,          // Country (default "USA")
   "location": {               // GeoJSON Point
     "type": "Point",

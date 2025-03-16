@@ -63,6 +63,7 @@ def validate_city(city_slug):
 def save_raw_places(places, source, city_slug, category):
     """
     Save raw place data to MongoDB, updating existing entries if they exist.
+    If a place with the same ID already exists, add the new category to its categories.
     
     Args:
         places (list): List of place dictionaries.
@@ -83,7 +84,7 @@ def save_raw_places(places, source, city_slug, category):
     # Set up indexes if they don't exist
     collection.create_index([("source", 1)])
     collection.create_index([("city_slug", 1)])
-    collection.create_index([("category", 1)])
+    collection.create_index([("categories", 1)])
     collection.create_index([("id", 1)], sparse=True)
     
     inserted_count = 0
@@ -97,22 +98,36 @@ def save_raw_places(places, source, city_slug, category):
         place['city_name'] = city['name']
         place['state'] = city['state']
         place['state_code'] = city['state_code']
-        place['category'] = category
+        
+        # Ensure place has a categories array with the current category
+        if 'categories' not in place:
+            place['categories'] = [category]
+            
         place['updated_at'] = datetime.now()
         
         # Define the query to find existing place
         query = {'source': 'google', 'id': place['id']}
         
-        # Try to update existing document
-        result = collection.update_one(
-            query,
-            {'$set': place},
-            upsert=True
-        )
+        # Check if the place already exists
+        existing_place = collection.find_one(query)
         
-        if result.matched_count > 0:
+        if existing_place:
+            # Place exists, update it and append the category if not already present
+            existing_categories = existing_place.get('categories', [])
+            
+            # Add the new category if it's not already in the list
+            if category not in existing_categories:
+                existing_categories.append(category)
+            
+            # Update the place with merged categories
+            place['categories'] = existing_categories
+            
+            # Update the document
+            result = collection.update_one(query, {'$set': place})
             updated_count += 1
         else:
+            # Place doesn't exist, insert it
+            result = collection.insert_one(place)
             inserted_count += 1
     
     return inserted_count, updated_count
@@ -134,7 +149,8 @@ def get_raw_places(city_slug=None, category=None):
     if city_slug:
         query['city_slug'] = city_slug
     if category:
-        query['category'] = category
+        # Filter by category in the categories array
+        query['categories'] = category
     
     return list(collection.find(query))
 
@@ -153,7 +169,7 @@ def save_processed_places(places, replace=False):
     
     # Set up indexes if they don't exist
     collection.create_index([("city_slug", 1)])
-    collection.create_index([("category", 1)])
+    collection.create_index([("categories", 1)])
     collection.create_index([("source_id", 1)], sparse=True)
     collection.create_index([("location", "2dsphere")])
     
@@ -162,7 +178,7 @@ def save_processed_places(places, replace=False):
         collection.drop()
         # Recreate indexes
         collection.create_index([("city_slug", 1)])
-        collection.create_index([("category", 1)])
+        collection.create_index([("categories", 1)])
         collection.create_index([("source_id", 1)], sparse=True)
         collection.create_index([("location", "2dsphere")])
     
@@ -191,7 +207,15 @@ def save_processed_places(places, replace=False):
             inserted_count += 1
             continue
         
-        # Try to update existing document
+        # Check if document exists to handle categories properly
+        existing_place = collection.find_one(query)
+        if existing_place and 'categories' in place and 'categories' in existing_place:
+            # Merge categories from existing and new place
+            all_categories = set(existing_place['categories'])
+            all_categories.update(place['categories'])
+            place['categories'] = list(all_categories)
+        
+        # Update or insert the document
         result = collection.update_one(
             query,
             {'$set': place},
@@ -222,6 +246,7 @@ def get_processed_places(city_slug=None, category=None):
     if city_slug:
         query['city_slug'] = city_slug
     if category:
-        query['category'] = category
+        # Updated to search in the categories array
+        query['categories'] = category
     
     return list(collection.find(query)) 

@@ -39,8 +39,8 @@ VALID_PLACE_TYPES = [
     'rage-room'
 ]
 
-# Comprehensive field mask to get all relevant data in a single request
-FIELD_MASK = 'places.displayName,places.formattedAddress,places.priceLevel,places.rating,places.userRatingCount,places.websiteUri,places.phoneNumber,places.primaryType,places.primaryTypeDisplayName,places.nationalPhoneNumber,places.regularOpeningHours,places.utcOffsetMinutes,places.location,places.id,places.editorialSummary,places.photos,places.primaryPhoto'
+# Updated field mask with only valid fields for the Google Places API v1
+FIELD_MASK = 'places.displayName,places.formattedAddress,places.priceLevel,places.id'
 
 def search_places(query, page_token=None):
     """
@@ -113,9 +113,9 @@ def collect_data(city, place_type_slug, max_results=60):
         places = results['places']
         print(f"Found {len(places)} places in this batch")
         
-        # Add the category to each place
+        # Add the category to each place as an array
         for place in places:
-            place['category'] = place_type_slug
+            place['categories'] = [place_type_slug]
         
         all_places.extend(places)
         
