@@ -1,11 +1,10 @@
 # Mental Health Resources Data Collector - Usage Guide
 
-This guide provides step-by-step instructions for collecting data about mental health resources using the Yelp Fusion API (free tier) and Google Places API (with free credits), storing all data in MongoDB.
+This guide provides step-by-step instructions for collecting data about mental health resources using the Google Places API (with free credits), storing all data in MongoDB.
 
 ## Prerequisites
 
-1. Create accounts and obtain API keys:
-   - [Yelp Fusion API](https://docs.developer.yelp.com/page/start-your-free-trial) - Free tier with 500 calls/day
+1. Create a Google Cloud Platform account and obtain API key:
    - [Google Cloud Platform](https://developers.google.com/maps/documentation/places/web-service/get-api-key) - $200 free monthly credits
 
 2. Install MongoDB:
@@ -21,9 +20,9 @@ This guide provides step-by-step instructions for collecting data about mental h
    # Install required dependencies
    pip install -r requirements.txt
    
-   # Create .env file with your API keys and MongoDB connection string
+   # Create .env file with your API key and MongoDB connection string
    cp .env.example .env
-   # Edit the .env file to add your actual API keys and MongoDB details
+   # Edit the .env file to add your actual API key and MongoDB details
    ```
 
 ## MongoDB Configuration
@@ -34,6 +33,9 @@ The system uses MongoDB to store city information, raw API data, and processed d
 # MongoDB Connection
 MONGO_CONNECTION_STRING=mongodb://localhost:27017/
 MONGO_DATABASE=mental_health_resources
+
+# Google Places API
+GOOGLE_PLACES_API_KEY=your_api_key_here
 ```
 
 - For a local MongoDB installation, use `mongodb://localhost:27017/`
@@ -67,80 +69,101 @@ python src/data_collection/add_cities.py
 The city fetcher automatically:
 1. Finds the city coordinates using the Nominatim API (OpenStreetMap)
 2. Determines state/province information
-3. Creates the proper city slug (e.g., "seattle-wa")
+3. Creates the proper city slug (e.g., "seattle")
 4. Adds the complete city record to MongoDB
 
 Each city needs to be added only once. After adding cities, you can proceed to collect data.
 
-## Step 2: Collect Data from Yelp API
+## Step 2: Collect Data from Google Places API
 
-The Yelp API is completely free (up to 500 calls/day) and provides rich data about businesses:
-
-```bash
-# Basic usage - search for escape rooms in Seattle
-python src/data_collection/yelp_collector.py --city-slug "seattle-wa" --category "escapegames"
-
-# Collect data about meditation centers in Portland
-python src/data_collection/yelp_collector.py --city-slug "portland-or" --category "meditationcenters"
-
-# Limit results to 20 items
-python src/data_collection/yelp_collector.py --city-slug "new-york-ny" --category "therapists" --max 20
-```
-
-Available categories for Yelp:
-- `escapegames` - Escape rooms
-- `arcades` - Arcade games
-- `meditationcenters` - Meditation centers
-- `yoga` - Yoga studios
-- `psychologists` - Psychologist offices
-- `therapists` - Therapist offices
-- `martialarts` - Martial arts studios
-- `boxing` - Boxing gyms
-- `parks` - Parks
-- `museums` - Museums
-- `artclasses` - Art classes
-
-## Step 3: Collect Data from Google Places API
-
-Google Places API offers broader data but uses credits. The first $200 of usage each month is free:
+Google Places API offers comprehensive data about places. The first $200 of usage each month is free:
 
 ```bash
 # Basic usage - search for escape rooms in Seattle
-python src/data_collection/google_places_collector.py --city-slug "seattle-wa" --type "escape_room"
+python src/data_collection/google_places_collector.py --city-slug "seattle" --type "escape-room"
 
 # Collect data about museums in Portland
-python src/data_collection/google_places_collector.py --city-slug "portland-or" --type "museum"
+python src/data_collection/google_places_collector.py --city-slug "portland" --type "museum"
 
 # Limit results to 20 items
-python src/data_collection/google_places_collector.py --city-slug "new-york-ny" --type "spa" --max 20
+python src/data_collection/google_places_collector.py --city-slug "new-york" --type "spa" --max 20
 ```
 
 Available place types for Google:
-- `amusement_park` - Amusement parks
-- `art_gallery` - Art galleries
-- `bowling_alley` - Bowling alleys
-- `escape_room` - Escape rooms
+- `amusement-park` - Amusement parks
+- `art-gallery` - Art galleries
+- `bowling-alley` - Bowling alleys
+- `escape-room` - Escape rooms
 - `gym` - Fitness centers
 - `spa` - Spas and wellness centers
 - `psychologist` - Psychologist offices
 - `health` - Health facilities
 - `park` - Parks
 - `museum` - Museums
-- `movie_theater` - Movie theaters
+- `movie-theater` - Movie theaters
+- `rage-room` - Rage rooms
 
-## Step 4: Process and Combine Data
+### Optimized Search Queries
 
-After collecting raw data from both APIs into MongoDB, you can process it to create a cleaned, deduplicated dataset:
+The collector uses optimized search query templates for each place type to get the best results:
+
+| Place Type | Example Query Templates |
+|------------|-------------------------|
+| escape-room | "top rated escape rooms in [city]" |
+| rage-room | "rage rooms in [city]" |
+| health | "mental health centers in [city]" |
+| psychologist | "top rated psychologists in [city]" |
+| spa | "best wellness spas in [city]" |
+| gym | "fitness centers in [city]" |
+| park | "relaxing parks in [city]" |
+| museum | "interactive museums in [city]" |
+| movie-theater | "movie theaters in [city]" |
+| bowling-alley | "bowling alleys in [city]" |
+| art-gallery | "interactive art galleries in [city]" |
+| amusement-park | "amusement parks in [city]" |
+
+These templates are designed to yield the most relevant results for each category. The collector automatically selects the appropriate template based on the place type.
+
+### Category Storage
+
+Each place record in the database now includes a `category` field that indicates which category it was collected under. This makes it easier to filter and organize the data later.
+
+### How the Collector Works
+
+1. The script validates that the city exists in the database
+2. It constructs an optimized search query based on the place type
+3. It uses the city's coordinates for location-based search
+4. It collects data using the Google Places API v1 Text Search endpoint
+5. It adds the category to each place record
+6. All data is saved directly to MongoDB without requiring a separate details API call
+7. Pagination is handled automatically to collect up to the specified maximum number of results
+
+### Field Mask
+
+The collector requests a comprehensive set of fields from the API in a single request:
+- Basic information (name, address, type)
+- Contact details (phone, website)
+- Ratings and reviews
+- Opening hours
+- Location coordinates
+- Photos
+- Editorial summaries
+
+This eliminates the need for separate API calls to get place details.
+
+## Step 3: Process and Combine Data
+
+After collecting raw data from Google Places API into MongoDB, you can process it to create a cleaned, deduplicated dataset:
 
 ```bash
 # Basic usage - combine all data from MongoDB raw collections
 python src/data_collection/combine_data.py
 
 # Process data for a specific city
-python src/data_collection/combine_data.py --city-slug "seattle-wa"
+python src/data_collection/combine_data.py --city-slug "seattle"
 
 # Process data for a specific category
-python src/data_collection/combine_data.py --category "escapegames"
+python src/data_collection/combine_data.py --category "escape_room"
 
 # Replace existing processed data (instead of updating)
 python src/data_collection/combine_data.py --replace
@@ -149,7 +172,7 @@ python src/data_collection/combine_data.py --replace
 This will:
 1. Load raw data from the raw_places collection
 2. Normalize the data to a common format
-3. Deduplicate entries that appear in both datasets
+3. Deduplicate entries
 4. Save the processed data to the processed_places collection
 
 ## MongoDB Collections Structure
@@ -158,19 +181,19 @@ The MongoDB database is organized with three main collections:
 
 - **Cities Collection** (`cities`)
   - Contains information about cities, including name, slug, state, coordinates
-  - Each city has a unique slug (e.g., "seattle-wa")
+  - Each city has a unique slug (e.g., "seattle")
   - Used to validate data collection requests
   - Stores geographical information for website city pages
 
 - **Raw Places Collection** (`raw_places`)
-  - Contains the original, unmodified data from the APIs
-  - Each document includes metadata about the source, city, and category
+  - Contains the original, unmodified data from Google Places API
+  - Each document includes metadata about the city and category
   - When importing new data, existing entries are updated
   - Best for inspecting raw API responses
 
 - **Processed Places Collection** (`processed_places`)
   - Contains normalized, deduplicated data
-  - All data follows a consistent schema regardless of source
+  - All data follows a consistent schema
   - Includes source IDs to trace back to original data
   - Ready to use in your website
 
@@ -187,10 +210,10 @@ db = client['mental_health_resources']
 collection = db['processed_places']
 
 # Example: Get all places in a specific city
-city_places = collection.find({'city_slug': 'seattle-wa'})
+city_places = collection.find({'city_slug': 'seattle'})
 
 # Example: Get places by category
-escape_rooms = collection.find({'category': 'escapegames'})
+escape_rooms = collection.find({'category': 'escape_room'})
 
 # Example: Get places by rating (4.5 stars or higher)
 top_rated = collection.find({'rating': {'$gte': 4.5}})
@@ -207,7 +230,7 @@ all_cities = list(cities_collection.find({}))
 {
   "_id": ObjectId,            // MongoDB document ID
   "name": String,             // City name (e.g. "Seattle")
-  "slug": String,             // URL-friendly identifier (e.g. "seattle-wa")
+  "slug": String,             // URL-friendly identifier (e.g. "seattle")
   "state": String,            // State name (e.g. "Washington")
   "state_code": String,       // State code (e.g. "WA")
   "country": String,          // Country (default "USA")
@@ -223,21 +246,20 @@ all_cities = list(cities_collection.find({}))
 ```
 
 ### Raw Places Collection Schema
-The raw schema varies by source (Yelp or Google) but includes these common fields:
+The raw schema includes these fields:
 ```
 {
   "_id": ObjectId,            // MongoDB document ID
-  "source": String,           // 'yelp' or 'google'
-  "city_slug": String,        // City slug (e.g. "seattle-wa")
+  "source": String,           // Always 'google'
+  "city_slug": String,        // City slug (e.g. "seattle")
   "city_name": String,        // City name
   "city_id": ObjectId,        // Reference to city document
   "state": String,            // State name
   "state_code": String,       // State code
   "category": String,         // Category used for collection
-  "yelp_id": String,          // Yelp Business ID (for Yelp data)
-  "google_id": String,        // Google Place ID (for Google data)
+  "google_id": String,        // Google Place ID
   "updated_at": Date,         // Last updated timestamp
-  ... additional API-specific fields ...
+  ... additional Google Places API fields ...
 }
 ```
 
@@ -247,7 +269,7 @@ The raw schema varies by source (Yelp or Google) but includes these common field
   "_id": ObjectId,            // MongoDB document ID
   "name": String,             // Business/place name
   "address": String,          // Formatted address
-  "city_slug": String,        // City slug (e.g. "seattle-wa")
+  "city_slug": String,        // City slug (e.g. "seattle")
   "city_name": String,        // City name
   "state": String,            // State name
   "state_code": String,       // State code
@@ -267,23 +289,16 @@ The raw schema varies by source (Yelp or Google) but includes these common field
   "image_url": String,        // Main image URL
   "is_closed": Boolean,       // Whether the place is permanently closed
   "hours": Array,             // Opening hours information
-  "source_ids": {             // Original IDs from each source
-    "yelp": String,
+  "source_ids": {             // Original IDs from Google
     "google": String
   },
-  "sources": Array,           // List of data sources ['yelp', 'google']
+  "sources": Array,           // List of data sources ['google']
   "created_at": Date,         // Creation timestamp
   "updated_at": Date          // Last updated timestamp
 }
 ```
 
 ## Tips for Efficient API and MongoDB Usage
-
-### Yelp API (Free Tier - 500 calls/day)
-- Each city+category search counts as one API call
-- Getting detailed business information counts as additional calls
-- Plan searches to stay within the daily limit
-- Script automatically respects rate limits
 
 ### Google Places API (Free Credits - $200/month)
 - Text searches cost about $0.04 per request (10,000 searches = $400)
@@ -293,17 +308,17 @@ The raw schema varies by source (Yelp or Google) but includes these common field
 - Our script fetches ALL available fields in the API response
 
 ### MongoDB Usage
-- The system now uses a single raw_places collection for all data
+- The system uses a single raw_places collection for all data
 - When collecting new data, existing entries are updated rather than duplicated
-- The processed_places collection contains deduplicated data from all sources
+- The processed_places collection contains deduplicated data
 - For production, set up MongoDB authentication
 - Consider setting up MongoDB Atlas for cloud-hosted access from your website
 
 ## Troubleshooting
 
 **API Key Issues:**
-- Ensure your API keys are correctly entered in the `.env` file
-- For Google, make sure you've enabled the Places API in your Google Cloud Console
+- Ensure your Google Places API key is correctly entered in the `.env` file
+- Make sure you've enabled the Places API in your Google Cloud Console
 
 **MongoDB Connection Issues:**
 - Check your MongoDB connection string in the `.env` file
@@ -312,11 +327,11 @@ The raw schema varies by source (Yelp or Google) but includes these common field
 
 **City Not Found:**
 - Make sure you've added the city using the simple_city_fetcher.py script
-- Check the city slug format (typically "cityname-statecode" in lowercase)
+- Check the city slug format (typically just the lowercase city name with hyphens, e.g. "new-york")
 - Run `python src/data_collection/simple_city_fetcher.py --city "New York" --country "USA"` to add cities
 
 **No Results Found:**
-- Try different category/type terms
+- Try different place types
 - Ensure the location is valid
 - Try a larger, more well-known city first
 
@@ -341,7 +356,7 @@ The Simple City Fetcher utility adds city information to your database when you 
 
 ### How It Works
 
-The utility uses the Nominatim API from OpenStreetMap to geocode city names, retrieve location details, and extract state/province information. For US cities, it maps state names to their two-letter codes, creating properly formatted city slugs.
+The utility uses the Nominatim API from OpenStreetMap to geocode city names, retrieve location details, and extract state/province information. For US cities, it maps state names to their two-letter codes.
 
 ### Usage Examples
 
@@ -371,12 +386,7 @@ Once cities are in your database, you can use them with your data collectors:
 
 ```bash
 # Use the city slugs with your collectors
-python src/data_collection/yelp_collector.py --city-slug "toronto-on" --category "escapegames"
+python src/data_collection/google_places_collector.py --city-slug "toronto" --type "escape_room"
 ```
 
-This utility makes setting up and maintaining your city database entirely painless. You can now focus on collecting venue data rather than manually researching city details.
-
-from simple_city_fetcher import fetch_and_add_city
-
-# That's it - just one line!
-success, message, slug = fetch_and_add_city("Las Vegas", "USA") 
+This utility makes setting up and maintaining your city database entirely painless. You can now focus on collecting venue data rather than manually researching city details. 

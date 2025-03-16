@@ -66,7 +66,7 @@ def save_raw_places(places, source, city_slug, category):
     
     Args:
         places (list): List of place dictionaries.
-        source (str): The data source (e.g., 'yelp', 'google').
+        source (str): The data source (always 'google').
         city_slug (str): The city slug.
         category (str): The category of places.
         
@@ -81,12 +81,10 @@ def save_raw_places(places, source, city_slug, category):
     collection = get_raw_places_collection()
     
     # Set up indexes if they don't exist
-    # This ensures we can quickly find documents by source-specific IDs
     collection.create_index([("source", 1)])
     collection.create_index([("city_slug", 1)])
     collection.create_index([("category", 1)])
-    collection.create_index([("yelp_id", 1)], sparse=True)
-    collection.create_index([("google_id", 1)], sparse=True)
+    collection.create_index([("id", 1)], sparse=True)
     
     inserted_count = 0
     updated_count = 0
@@ -103,17 +101,7 @@ def save_raw_places(places, source, city_slug, category):
         place['updated_at'] = datetime.now()
         
         # Define the query to find existing place
-        query = {}
-        if source == 'yelp' and 'id' in place:
-            query = {'source': 'yelp', 'yelp_id': place['id']}
-            place['yelp_id'] = place['id']  # Store the ID in a consistent field
-        elif source == 'google' and 'place_id' in place:
-            query = {'source': 'google', 'google_id': place['place_id']}
-            place['google_id'] = place['place_id']  # Store the ID in a consistent field
-        
-        if not query:
-            # If no ID is found, skip this place
-            continue
+        query = {'source': 'google', 'id': place['id']}
         
         # Try to update existing document
         result = collection.update_one(
@@ -129,12 +117,11 @@ def save_raw_places(places, source, city_slug, category):
     
     return inserted_count, updated_count
 
-def get_raw_places(source=None, city_slug=None, category=None):
+def get_raw_places(city_slug=None, category=None):
     """
     Get raw places data from MongoDB with optional filtering.
     
     Args:
-        source (str, optional): Filter by source.
         city_slug (str, optional): Filter by city slug.
         category (str, optional): Filter by category.
         
@@ -143,9 +130,7 @@ def get_raw_places(source=None, city_slug=None, category=None):
     """
     collection = get_raw_places_collection()
     
-    query = {}
-    if source:
-        query['source'] = source
+    query = {'source': 'google'}
     if city_slug:
         query['city_slug'] = city_slug
     if category:
@@ -169,8 +154,7 @@ def save_processed_places(places, replace=False):
     # Set up indexes if they don't exist
     collection.create_index([("city_slug", 1)])
     collection.create_index([("category", 1)])
-    collection.create_index([("source_ids.yelp", 1)], sparse=True)
-    collection.create_index([("source_ids.google", 1)], sparse=True)
+    collection.create_index([("source_id", 1)], sparse=True)
     collection.create_index([("location", "2dsphere")])
     
     # If replace flag is set, drop the collection first
@@ -179,8 +163,7 @@ def save_processed_places(places, replace=False):
         # Recreate indexes
         collection.create_index([("city_slug", 1)])
         collection.create_index([("category", 1)])
-        collection.create_index([("source_ids.yelp", 1)], sparse=True)
-        collection.create_index([("source_ids.google", 1)], sparse=True)
+        collection.create_index([("source_id", 1)], sparse=True)
         collection.create_index([("location", "2dsphere")])
     
     inserted_count = 0
@@ -192,18 +175,11 @@ def save_processed_places(places, replace=False):
         
         # Build query to find existing place
         query = {}
-        if 'source_ids' in place:
-            source_ids = []
-            if 'yelp' in place['source_ids'] and place['source_ids']['yelp']:
-                source_ids.append({"source_ids.yelp": place['source_ids']['yelp']})
-            if 'google' in place['source_ids'] and place['source_ids']['google']:
-                source_ids.append({"source_ids.google": place['source_ids']['google']})
-            
-            if source_ids:
-                query = {"$or": source_ids}
+        if 'source_id' in place and place['source_id']:
+            query = {"source_id": place['source_id']}
         
         if not query and 'city_slug' in place and 'name' in place:
-            # If no source IDs, try to match by name and city
+            # If no source ID, try to match by name and city
             query = {
                 "city_slug": place['city_slug'],
                 "name": place['name']

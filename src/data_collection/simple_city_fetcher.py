@@ -47,7 +47,6 @@ def setup_collection():
     # Create indexes
     collection.create_index([("slug", 1)], unique=True)
     collection.create_index([("name", 1)])
-    collection.create_index([("state_code", 1)])
     collection.create_index([("location", GEOSPHERE)])
     
     print("Cities collection set up with indexes.")
@@ -91,47 +90,9 @@ def fetch_and_add_city(city_name, country="USA"):
         
         # Extract state information
         state_name = address.get('state')
-        state_code = None
-        
-        # For USA, get the 2-letter state code
-        if country == "USA" and state_name:
-            # Try to extract from display name
-            display_name = city_data.get('display_name', '')
-            state_code_match = re.search(r',\s+([A-Z]{2}),\s+USA', display_name)
-            
-            if state_code_match:
-                state_code = state_code_match.group(1)
-            else:
-                # Use state mapping for US
-                us_state_to_code = {
-                    'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
-                    'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
-                    'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
-                    'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
-                    'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
-                    'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
-                    'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
-                    'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
-                    'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
-                    'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
-                    'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
-                    'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
-                    'wisconsin': 'WI', 'wyoming': 'WY'
-                }
-                state_code = us_state_to_code.get(state_name.lower())
-        
-        # For other countries, use first 2 letters of state/province
-        if not state_code and state_name:
-            state_code = state_name[:2].upper()
-            
-        # Default values
-        if not state_name:
-            state_name = "Unknown"
-        if not state_code:
-            state_code = "UN"
-            
-        # Create a slug
-        slug = f"{city_name.lower().replace(' ', '-')}-{state_code.lower()}"
+
+        # Create a slug - simplified to only use city name
+        slug = city_name.lower().replace(' ', '-')
         
         # Check if city already exists
         collection = get_cities_collection()
@@ -144,7 +105,6 @@ def fetch_and_add_city(city_name, country="USA"):
             "name": city_name,
             "slug": slug,
             "state": state_name,
-            "state_code": state_code,
             "country": country,
             "location": {
                 "type": "Point",
@@ -156,7 +116,7 @@ def fetch_and_add_city(city_name, country="USA"):
         
         # Add to MongoDB
         result = collection.insert_one(city)
-        return True, f"City '{city_name}, {state_code}' added with ID: {result.inserted_id}", slug
+        return True, f"City '{city_name}, {country}' added with ID: {result.inserted_id}", slug
         
     except requests.exceptions.RequestException as e:
         return False, f"Error fetching city data: {e}", None

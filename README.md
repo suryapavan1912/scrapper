@@ -17,41 +17,48 @@ This project collects data about therapeutic and stress-relief locations like ra
 
 ## Usage
 
-### Collecting Data from Yelp (Free Tier)
-```
-python src/data_collection/yelp_collector.py --city "City Name" --category "Category Name"
-```
-
 ### Collecting Data from Google Places (Free Credits)
 ```
-python src/data_collection/google_places_collector.py --city "City Name" --type "Place Type"
+python src/data_collection/google_places_collector.py --city-slug "city-slug" --type "place-type"
+```
+
+Example:
+```
+python src/data_collection/google_places_collector.py --city-slug "seattle" --type "escape-room" --max 20
 ```
 
 ## Available Categories/Types
 
-### Yelp Categories
-- escapegames
-- arcades
-- meditationcenters
-- yoga
-- psychologists
-- therapists
-
 ### Google Place Types
-- amusement_park
-- art_gallery
-- bowling_alley
-- escape_room
+- amusement-park
+- art-gallery
+- bowling-alley
+- escape-room
 - gym
 - spa
 - psychologist
 - health
+- park
+- museum
+- movie-theater
+- rage-room
+
+## Effective Search Queries
+
+The Google Places collector uses optimized search queries for each place type to get the best results. Some examples:
+
+- Escape Rooms: "top rated escape rooms in [city]"
+- Rage Rooms: "rage rooms in [city]"
+- Mental Health: "mental health centers in [city]"
+- Parks: "relaxing parks in [city]"
+- Museums: "interactive museums in [city]"
+
+See the `get_search_query()` function in the collector for the full list of templates.
 
 ## Output
 
-Data is saved in the `data/` directory in JSON format.
+Data is saved to MongoDB in the `raw_places` collection. Each place record includes the category it was collected under.
 
 ## API Limitations
 
-- Yelp Fusion API: 500 calls/day with the free tier
 - Google Places API: $200 free monthly credits, then pay-per-use 
